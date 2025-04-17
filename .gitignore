@@ -1,0 +1,19 @@
+# Ignore Python cache and virtualenv
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.json
+*.log
+
+# macOS system files
+.DS_Store
+
+# VSCode or other IDE config
+.vscode/
+.idea/
+
+# Secrets
+*.key
+*.pem
+*.p12
