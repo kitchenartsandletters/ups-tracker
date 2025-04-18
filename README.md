@@ -6,8 +6,8 @@ This project automates tracking UPS packages and logs their statuses to a Google
 
 - **Package Tracking**: Retrieve real-time package status and location using UPS Tracking API
 - **Address Validation**: Validate delivery addresses with UPS Address Validation API
-- **Delivery Estimates**: Get estimated delivery times using UPS Time in Transit API
-- **Real-time Alerts**: Subscribe to push notifications with UPS Track Alert API
+- **Delivery Estimates**: Get estimated delivery times directly from tracking data
+- **Human-Friendly Dates**: All dates and times are formatted for easy reading
 - **Automated Updates**: Scheduled tracking updates every 6 hours via GitHub Actions
 
 ## Setup Instructions
@@ -16,9 +16,8 @@ This project automates tracking UPS packages and logs their statuses to a Google
 
 1. UPS Developer Account with the following APIs enabled:
    - Tracking API
-   - Address Validation API
-   - Time in Transit API
-   - Track Alert API
+   - Address Validation API 
+   - Time in Transit API (optional, provides fallback delivery estimates)
 
 2. Google Cloud account with:
    - Google Sheets API enabled
@@ -31,7 +30,7 @@ This project automates tracking UPS packages and logs their statuses to a Google
 
 1. Clone this repository
 ```bash
-git clone https://github.com/kitchenartsandletters.com/ups-tracker.git
+git clone https://github.com/yourusername/ups-tracker.git
 cd ups-tracker
 ```
 
@@ -47,17 +46,17 @@ pip install -r requirements.txt
    - Column D: Current Location
    - Column E: Validated Address
    - Column F: Estimated Delivery
-   - Column G: Alert Status
 
 4. Share the Google Sheet with your service account email address
 
 5. Set up GitHub Secrets in your repository:
    - `UPS_CLIENT_ID`: Your UPS API Client ID
    - `UPS_CLIENT_SECRET`: Your UPS API Client Secret
-   - `GOOGLE_SHEET_ID`: The ID of your Google Sheet
-   - `GOOGLE_CREDENTIALS`: Base64-encoded Google service account JSON credentials
-   - `NOTIFICATION_EMAIL`: Email for receiving tracking alerts
-   - `ORIGIN_CITY`, `ORIGIN_STATE`, `ORIGIN_ZIP`: Optional origin address for time-in-transit estimates
+   - `GOOGLE_CREDENTIALS`: Your Google service account JSON credentials
+   - `ORIGIN_STREET`: Street address for origin (for Time in Transit estimates)
+   - `ORIGIN_CITY`: City for origin address
+   - `ORIGIN_STATE`: State for origin address (two-letter code)
+   - `ORIGIN_ZIP`: ZIP code for origin address
 
 ### Usage
 
@@ -73,11 +72,48 @@ python updated_track_packages.py
 
 The GitHub Action workflow will run automatically every 6 hours. You can also trigger it manually via the GitHub Actions tab.
 
+## Key Learnings
+
+1. **UPS API Configuration**: 
+   - Each UPS API must be explicitly activated in the UPS Developer Portal
+   - You need distinct permission for each API you want to use
+   - OAuth token acquisition works independently from API permissions
+
+2. **API Response Handling**:
+   - UPS date formats need conversion to be human-readable
+   - Response formats may vary between different tracking numbers
+   - Fallback options improve reliability when specific data is missing
+
+3. **Google Sheets Integration**:
+   - Use batch updates instead of individual updates for better performance
+   - The latest gspread library recommends specific parameter patterns
+
+4. **Address Validation**:
+   - Not all tracking responses include complete address information
+   - Validate incomplete addresses when necessary, but handle validation failures gracefully
+
+5. **Estimated Delivery Times**:
+   - Primary source: Package tracking data (most accurate)
+   - Fallback: Time in Transit API (when tracking doesn't include delivery date)
+
 ## File Structure
 
 - `updated_track_packages.py`: Main script that handles tracking and API communication
 - `requirements.txt`: Python dependencies
 - `.github/workflows/github_workflow.yml`: GitHub Actions workflow definition
+- `format_credentials.py`: Helper script for formatting Google credentials
+- `test_credentials.py`: Test script to verify credentials are working
+
+## Improvement Roadmap
+
+See the Issues tab for planned improvements:
+
+1. Optimize cron job frequency for better data timeliness
+2. Add support for multiple Google Sheets
+3. Enable direct integration with e-commerce platforms (Shopify, etc.)
+4. Add support for additional carriers (USPS, DHL, etc.)
+5. Add email notifications for delivery exceptions
+6. Create a database seeding tool for adding all 'open' (undelivered) shipments 
 
 ## Contributing
 
@@ -85,4 +121,4 @@ Contributions are welcome! Feel free to submit a pull request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the LICENSE file for details
