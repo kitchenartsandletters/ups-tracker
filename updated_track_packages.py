@@ -81,6 +81,22 @@ def get_ups_oauth_token():
         client_id = os.environ['UPS_CLIENT_ID']
         client_secret = os.environ['UPS_CLIENT_SECRET']
         
+        # Log credential information (mask most of it for security)
+        if client_id:
+            masked_id = client_id[:4] + '*' * (len(client_id) - 4) if len(client_id) > 4 else '****'
+            logger.info(f"Using Client ID: {masked_id}")
+        else:
+            logger.error("UPS_CLIENT_ID is empty or not set")
+            
+        if client_secret:
+            logger.info(f"Client Secret is set (length: {len(client_secret)})")
+        else:
+            logger.error("UPS_CLIENT_SECRET is empty or not set")
+        
+        # UPS OAuth endpoint
+        oauth_url = 'https://onlinetools.ups.com/security/v1/oauth/token'
+        logger.info(f"Using OAuth URL: {oauth_url}")
+        
         # Request headers
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -91,26 +107,44 @@ def get_ups_oauth_token():
             'grant_type': 'client_credentials',
         }
         
+        logger.info("Sending OAuth token request...")
+        
         # Make the request
         response = requests.post(
-            UPS_OAUTH_URL,
+            oauth_url,
             headers=headers,
             data=data,
             auth=(client_id, client_secret)
         )
         
+        logger.info(f"OAuth response status code: {response.status_code}")
+        logger.info(f"OAuth response headers: {response.headers}")
+        
         if response.status_code == 200:
             token_data = response.json()
             access_token = token_data.get('access_token')
-            logger.info("Successfully obtained UPS OAuth token")
-            return access_token
+            expires_in = token_data.get('expires_in', 'unknown')
+            logger.info(f"Successfully obtained UPS OAuth token (expires in {expires_in} seconds)")
+            
+            # Mask token for security in logs
+            if access_token:
+                masked_token = access_token[:10] + '*' * 10 + access_token[-5:] if len(access_token) > 25 else '****'
+                logger.info(f"Token: {masked_token}")
+                return access_token
+            else:
+                logger.error("Access token not found in response")
+                return None
         else:
-            logger.error(f"Failed to get OAuth token: {response.status_code} - {response.text}")
+            logger.error(f"Failed to get OAuth token: {response.status_code}")
+            logger.error(f"Response body: {response.text}")
             return None
+    except KeyError as e:
+        logger.error(f"Environment variable not set: {e}")
+        return None
     except Exception as e:
         logger.error(f"Error obtaining UPS OAuth token: {e}")
         return None
-
+    
 def get_tracking_info(tracking_number, access_token):
     """
     Query the UPS Tracking API for a specific tracking number.
