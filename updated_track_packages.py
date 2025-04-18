@@ -138,6 +138,7 @@ def get_ups_oauth_token():
 def get_tracking_info(tracking_number, access_token):
     """
     Query the UPS Tracking API for a specific tracking number.
+    Enhanced to include query parameters from the example.
     
     Args:
         tracking_number: The UPS tracking number
@@ -151,6 +152,14 @@ def get_tracking_info(tracking_number, access_token):
         tracking_url = UPS_TRACK_URL + tracking_number
         logger.info(f"Using Tracking API URL: {tracking_url}")
         
+        # Query parameters based on the example
+        query_params = {
+            "locale": "en_US",
+            "returnSignature": "false",
+            "returnMilestones": "false",
+            "returnPOD": "false"
+        }
+        
         # Request headers
         trans_id = f'track_{int(time.time())}'
         headers = {
@@ -163,8 +172,12 @@ def get_tracking_info(tracking_number, access_token):
         logger.info(f"Using transaction ID: {trans_id}")
         logger.info(f"Sending tracking request for: {tracking_number}")
         
-        # Make the request
-        response = requests.get(tracking_url, headers=headers)
+        # Make the request with query parameters
+        response = requests.get(
+            tracking_url, 
+            headers=headers,
+            params=query_params
+        )
         
         logger.info(f"Tracking API response status: {response.status_code}")
         
@@ -347,19 +360,24 @@ def get_time_in_transit(origin, destination, access_token):
 def parse_tracking_response(tracking_data):
     """
     Parse the UPS Tracking API response to extract relevant information.
+    Enhanced to specifically extract delivery date information.
     
     Args:
         tracking_data: The API response from UPS
         
     Returns:
-        tuple: (status, last_update, location, address) or (None, None, None, None) if parsing fails
+        tuple: (status, last_update, location, address, delivery_estimate) or (None, None, None, None, None) if parsing fails
     """
     try:
         if not tracking_data:
-            return None, None, None, None
+            return None, None, None, None, None
             
+        # Log the tracking data structure for debugging
+        logger.info(f"Parsing tracking data response")
+        
         # Extract package information
-        package = tracking_data.get('trackResponse', {}).get('shipment', [{}])[0].get('package', [{}])[0]
+        shipment = tracking_data.get('trackResponse', {}).get('shipment', [{}])[0]
+        package = shipment.get('package', [{}])[0]
         
         # Get status
         activity = package.get('activity', [{}])[0]
@@ -382,20 +400,19 @@ def parse_tracking_response(tracking_data):
         location_parts = [part for part in [city, state, country] if part]
         location = ', '.join(location_parts) if location_parts else 'Unknown'
         
-        # Try to get street address from shipment information if available
-        try:
-            shipment = tracking_data.get('trackResponse', {}).get('shipment', [{}])[0]
-            ship_to = shipment.get('shipTo', {})
-            street = ship_to.get('address', {}).get('addressLine', '')
-            
-            # If not available in shipTo, try other locations
-            if not street and shipment.get('package'):
-                delivery_detail = shipment.get('package', [{}])[0].get('deliveryDetail', {})
-                street = delivery_detail.get('addressLine', '')
-        except:
-            street = ""
+        # Extract street address if available
+        street = ""
+        ship_to = shipment.get('shipTo', {})
+        if ship_to:
+            ship_to_address = ship_to.get('address', {})
+            if ship_to_address:
+                street_lines = ship_to_address.get('addressLine', [])
+                if isinstance(street_lines, list) and street_lines:
+                    street = street_lines[0]
+                elif isinstance(street_lines, str):
+                    street = street_lines
         
-        # Create address dict for validation with enhanced information
+        # Create address dict for validation
         address_dict = {
             "street": street,
             "city": city,
@@ -404,10 +421,67 @@ def parse_tracking_response(tracking_data):
             "country": country
         }
         
-        return status, last_update, location, address_dict
+        # Extract delivery date information - primary focus
+        delivery_estimate = None
+        
+        # Check multiple places for delivery date information
+        
+        # 1. Check the deliveryDate object if present
+        delivery_dates = package.get('deliveryDate', [])
+        if delivery_dates:
+            for delivery_date_obj in delivery_dates:
+                date = delivery_date_obj.get('date', '')
+                type_code = delivery_date_obj.get('type', '')
+                
+                # Log what we found
+                logger.info(f"Found delivery date: {date}, type: {type_code}")
+                
+                if date:
+                    delivery_estimate = f"Estimated delivery: {date}"
+                    break
+        
+        # 2. If not found, check deliveryTime object
+        if not delivery_estimate:
+            delivery_time = package.get('deliveryTime', {})
+            if delivery_time:
+                date_type = delivery_time.get('type', '')
+                start_time = delivery_time.get('startTime', '')
+                end_time = delivery_time.get('endTime', '')
+                
+                logger.info(f"Found delivery time: type={date_type}, start={start_time}, end={end_time}")
+                
+                if date_type and (start_time or end_time):
+                    if date_type == 'EDW' and start_time and end_time:
+                        # Format time for better readability (HHMMSS to HH:MM)
+                        start_formatted = f"{start_time[:2]}:{start_time[2:4]}" if len(start_time) >= 4 else start_time
+                        end_formatted = f"{end_time[:2]}:{end_time[2:4]}" if len(end_time) >= 4 else end_time
+                        delivery_estimate = f"Estimated delivery window: {start_formatted}-{end_formatted}"
+                    elif date_type == 'CMT' and end_time:
+                        end_formatted = f"{end_time[:2]}:{end_time[2:4]}" if len(end_time) >= 4 else end_time
+                        delivery_estimate = f"Commitment time: by {end_formatted}"
+                    elif date_type:
+                        delivery_estimate = f"Delivery type: {date_type}"
+        
+        # 3. If still not found, check package status for delivery information
+        if not delivery_estimate and 'SCHEDULED DELIVERY' in status.upper():
+            # Extract date from status if possible
+            import re
+            date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', status)
+            if date_match:
+                delivery_estimate = f"Scheduled delivery: {date_match.group(1)}"
+        
+        # If we found a delivery estimate, log it
+        if delivery_estimate:
+            logger.info(f"Extracted delivery estimate: {delivery_estimate}")
+        else:
+            logger.warning("No delivery estimate found in tracking data")
+        
+        return status, last_update, location, address_dict, delivery_estimate
     except Exception as e:
         logger.error(f"Error parsing tracking response: {e}")
-        return None, None, None, None
+        import traceback
+        logger.error(f"Parse error details: {traceback.format_exc()}")
+        return None, None, None, None, None
 
 def parse_validated_address(validation_data):
     """
@@ -615,7 +689,7 @@ def main():
             "country": "US"
         }
         
-        # Log the origin address details
+        # Log origin address details
         if any(origin_address.values()):
             logger.info(f"Origin address details:")
             logger.info(f"  Street: {origin_address.get('street', 'Not set')}")
@@ -637,8 +711,8 @@ def main():
             # Get tracking information
             tracking_info = get_tracking_info(tracking_number, access_token)
             
-            # Parse tracking response
-            status, last_update, location, address_dict = parse_tracking_response(tracking_info)
+            # Parse tracking response - now includes delivery_estimate
+            status, last_update, location, address_dict, delivery_estimate = parse_tracking_response(tracking_info)
             
             # Update data dictionary
             update_data = {
@@ -647,6 +721,11 @@ def main():
                 'location': location
             }
             
+            # Add delivery estimate from tracking data if available
+            if delivery_estimate:
+                update_data['estimated_delivery'] = delivery_estimate
+                logger.info(f"Using delivery estimate from tracking data: {delivery_estimate}")
+            
             # Validate address if we have one
             if address_dict and any(address_dict.values()):
                 validation_data = validate_address(address_dict, access_token)
@@ -654,13 +733,15 @@ def main():
                 if validated_address:
                     update_data['validated_address'] = validated_address
                 
-                # If we have origin address with postal code, estimate transit time
-                if origin_address.get('postal_code') and address_dict.get('postal_code'):
+                # Only try time in transit if we don't already have a delivery estimate
+                if not delivery_estimate and origin_address.get('postal_code') and address_dict.get('postal_code'):
+                    logger.info("No delivery estimate from tracking data, trying Time in Transit API")
                     time_data = get_time_in_transit(origin_address, address_dict, access_token)
                     if time_data:
                         estimated_delivery = parse_time_in_transit(time_data)
                         if estimated_delivery:
                             update_data['estimated_delivery'] = estimated_delivery
+                            logger.info(f"Using delivery estimate from Time in Transit API: {estimated_delivery}")
                     else:
                         logger.warning(f"Unable to get time in transit estimate for {tracking_number}")
             
@@ -676,6 +757,8 @@ def main():
         logger.info("Tracking script completed successfully")
     except Exception as e:
         logger.error(f"Error in main function: {e}")
+        import traceback
+        logger.error(f"Main function error details: {traceback.format_exc()}")
 
 if __name__ == "__main__":
     main()
