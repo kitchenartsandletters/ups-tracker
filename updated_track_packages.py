@@ -244,9 +244,11 @@ def validate_address(address, access_token):
         logger.error(f"Error validating address: {e}")
         return None
 
+# Improved Time in Transit function
 def get_time_in_transit(origin, destination, access_token):
     """
     Get estimated time in transit using the UPS Time in Transit API.
+    Enhanced with better logging and validation.
     
     Args:
         origin: Origin address (dict with address details)
@@ -257,9 +259,20 @@ def get_time_in_transit(origin, destination, access_token):
         dict: Time in transit information or None if an error occurs
     """
     try:
-        # Only proceed if we have minimum required information
-        if not (origin.get("postal_code") and destination.get("postal_code")):
-            logger.warning("Missing required postal codes for time in transit calculation")
+        # Log what we have
+        logger.info(f"Origin data: {origin}")
+        logger.info(f"Destination data: {destination}")
+        
+        # Check if we have the minimum required fields
+        origin_postal = origin.get("postal_code")
+        dest_postal = destination.get("postal_code")
+        
+        if not origin_postal:
+            logger.error("Missing origin postal code for time in transit calculation")
+            return None
+            
+        if not dest_postal:
+            logger.error("Missing destination postal code for time in transit calculation")
             return None
             
         # Request headers
@@ -279,14 +292,14 @@ def get_time_in_transit(origin, destination, access_token):
                 "addressLine": origin.get("street", ""),
                 "city": origin.get("city", ""),
                 "stateProvince": origin.get("state", ""),
-                "postalCode": origin.get("postal_code", ""),
+                "postalCode": origin_postal,
                 "countryCode": origin.get("country", "US")
             },
             "destinationAddress": {
                 "addressLine": destination.get("street", ""),
                 "city": destination.get("city", ""),
                 "stateProvince": destination.get("state", ""),
-                "postalCode": destination.get("postal_code", ""),
+                "postalCode": dest_postal,
                 "countryCode": destination.get("country", "US")
             },
             "shipDate": ship_date,
@@ -295,11 +308,11 @@ def get_time_in_transit(origin, destination, access_token):
                 "weight": "1",
                 "unitOfMeasurement": "LBS"
             },
-            "totalPackagesInShipment": "1",
-            "workflowCode": "TimeInTransit"
+            "totalPackagesInShipment": "1"
         }
         
-        logger.info(f"Requesting time in transit estimate from {origin.get('postal_code')} to {destination.get('postal_code')}")
+        logger.info(f"Requesting time in transit estimate from {origin_postal} to {dest_postal}")
+        logger.info(f"Request data: {json.dumps(data)}")
         
         # Make the request
         response = requests.post(
@@ -309,6 +322,7 @@ def get_time_in_transit(origin, destination, access_token):
         )
         
         logger.info(f"Time in Transit API response status: {response.status_code}")
+        logger.info(f"Time in Transit API response body: {response.text}")
         
         if response.status_code == 200:
             time_data = response.json()
@@ -491,9 +505,11 @@ def parse_time_in_transit(time_data):
         logger.error(f"Error parsing time in transit: {e}")
         return "Error getting estimated delivery time"
 
+# Function to fix Google Sheets update method
 def update_sheet_row(sheet, row, data):
     """
     Update a row in the Google Sheet with tracking information.
+    Uses the current recommended gspread method to avoid deprecation warnings.
     
     Args:
         sheet: Google Sheet object
@@ -504,33 +520,50 @@ def update_sheet_row(sheet, row, data):
         # Add current timestamp to show when the script ran
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Fix the deprecated method warnings by using the recommended approach
-        # for gspread updates
+        # Prepare all updates as a batch instead of individual calls
+        # This also avoids the deprecation warnings
+        updates = []
         
         # Update status
         if 'status' in data and data['status']:
-            sheet.update(range_name=f'{STATUS_COLUMN}{row}', values=[[data['status']]])
+            updates.append({
+                'range': f'{STATUS_COLUMN}{row}',
+                'values': [[data['status']]]
+            })
         
         # Update last_update
         if 'last_update' in data and data['last_update']:
-            sheet.update(
-                range_name=f'{UPDATE_COLUMN}{row}', 
-                values=[[f"{data['last_update']} (checked: {current_time})"]]
-            )
+            updates.append({
+                'range': f'{UPDATE_COLUMN}{row}',
+                'values': [[f"{data['last_update']} (checked: {current_time})"]]
+            })
         
         # Update location
         if 'location' in data and data['location']:
-            sheet.update(range_name=f'{LOCATION_COLUMN}{row}', values=[[data['location']]])
+            updates.append({
+                'range': f'{LOCATION_COLUMN}{row}',
+                'values': [[data['location']]]
+            })
             
         # Update validated_address
         if 'validated_address' in data and data['validated_address']:
-            sheet.update(range_name=f'{ADDRESS_COLUMN}{row}', values=[[data['validated_address']]])
+            updates.append({
+                'range': f'{ADDRESS_COLUMN}{row}',
+                'values': [[data['validated_address']]]
+            })
             
         # Update estimated_delivery
         if 'estimated_delivery' in data and data['estimated_delivery']:
-            sheet.update(range_name=f'{ETA_COLUMN}{row}', values=[[data['estimated_delivery']]])
-            
-        logger.info(f"Updated row {row} with latest tracking information")
+            updates.append({
+                'range': f'{ETA_COLUMN}{row}',
+                'values': [[data['estimated_delivery']]]
+            })
+        
+        # If we have updates, apply them as a batch
+        if updates:
+            sheet.batch_update(updates)
+            logger.info(f"Updated row {row} with latest tracking information")
+        
     except Exception as e:
         logger.error(f"Error updating sheet row {row}: {e}")
 
@@ -576,8 +609,13 @@ def main():
             "country": "US"
         }
         
+        # Log the origin address details
         if any(origin_address.values()):
-            logger.info(f"Using origin address: {origin_address.get('city')}, {origin_address.get('state')} {origin_address.get('postal_code')}")
+            logger.info(f"Origin address details:")
+            logger.info(f"  Street: {origin_address.get('street', 'Not set')}")
+            logger.info(f"  City: {origin_address.get('city', 'Not set')}")
+            logger.info(f"  State: {origin_address.get('state', 'Not set')}")
+            logger.info(f"  Postal code: {origin_address.get('postal_code', 'Not set')}")
         else:
             logger.warning("No origin address provided for time-in-transit calculations")
         
@@ -610,12 +648,15 @@ def main():
                 if validated_address:
                     update_data['validated_address'] = validated_address
                 
-                # If we have origin address, estimate transit time
-                if any(origin_address.values()) and any(address_dict.values()):
+                # If we have origin address with postal code, estimate transit time
+                if origin_address.get('postal_code') and address_dict.get('postal_code'):
                     time_data = get_time_in_transit(origin_address, address_dict, access_token)
-                    estimated_delivery = parse_time_in_transit(time_data)
-                    if estimated_delivery:
-                        update_data['estimated_delivery'] = estimated_delivery
+                    if time_data:
+                        estimated_delivery = parse_time_in_transit(time_data)
+                        if estimated_delivery:
+                            update_data['estimated_delivery'] = estimated_delivery
+                    else:
+                        logger.warning(f"Unable to get time in transit estimate for {tracking_number}")
             
             # Update sheet
             if update_data:
