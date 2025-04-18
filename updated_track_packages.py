@@ -248,7 +248,7 @@ def validate_address(address, access_token):
 def get_time_in_transit(origin, destination, access_token):
     """
     Get estimated time in transit using the UPS Time in Transit API.
-    Enhanced with better logging and validation.
+    Updated to match the exact format shown in the UPS example.
     
     Args:
         origin: Origin address (dict with address details)
@@ -280,43 +280,44 @@ def get_time_in_transit(origin, destination, access_token):
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json',
             'transId': f'time_{int(time.time())}',
-            'transactionSrc': 'timeInTransit'
+            'transactionSrc': 'tracking'
         }
         
         # Current date in YYYY-MM-DD format
         ship_date = datetime.now().strftime("%Y-%m-%d")
         
-        # Enhanced request body with more details
+        # Format the request exactly as in the example
         data = {
-            "originAddress": {
-                "addressLine": origin.get("street", ""),
-                "city": origin.get("city", ""),
-                "stateProvince": origin.get("state", ""),
-                "postalCode": origin_postal,
-                "countryCode": origin.get("country", "US")
-            },
-            "destinationAddress": {
-                "addressLine": destination.get("street", ""),
-                "city": destination.get("city", ""),
-                "stateProvince": destination.get("state", ""),
-                "postalCode": dest_postal,
-                "countryCode": destination.get("country", "US")
-            },
+            "originCountryCode": origin.get("country", "US"),
+            "originStateProvince": origin.get("state", ""),
+            "originCityName": origin.get("city", ""),
+            "originTownName": "",
+            "originPostalCode": origin_postal,
+            "destinationCountryCode": destination.get("country", "US"),
+            "destinationStateProvince": destination.get("state", ""),
+            "destinationCityName": destination.get("city", ""),
+            "destinationTownName": "",
+            "destinationPostalCode": dest_postal,
+            "weight": "1.0",
+            "weightUnitOfMeasure": "LBS",
+            "shipmentContentsValue": "1.0",
+            "shipmentContentsCurrencyCode": "USD",
+            "billType": "03",
             "shipDate": ship_date,
-            "shipTime": "12:00:00",
-            "weight": {
-                "weight": "1",
-                "unitOfMeasurement": "LBS"
-            },
-            "totalPackagesInShipment": "1"
+            "shipTime": "",
+            "residentialIndicator": "",
+            "numberOfPackages": "1"
         }
         
         logger.info(f"Requesting time in transit estimate from {origin_postal} to {dest_postal}")
         logger.info(f"Request data: {json.dumps(data)}")
         
+        # Use the correct endpoint URL based on the example
+        transit_url = "https://onlinetools.ups.com/api/shipments/v1/transittimes"
+        
         # Make the request
         response = requests.post(
-            UPS_TIME_IN_TRANSIT_URL,
+            transit_url,
             headers=headers,
             json=data
         )
@@ -333,6 +334,8 @@ def get_time_in_transit(origin, destination, access_token):
             return None
     except Exception as e:
         logger.error(f"Error getting time in transit: {e}")
+        import traceback
+        logger.error(f"Detailed exception: {traceback.format_exc()}")
         return None
 
 def parse_tracking_response(tracking_data):
@@ -461,6 +464,7 @@ def parse_validated_address(validation_data):
 def parse_time_in_transit(time_data):
     """
     Parse the UPS Time in Transit API response.
+    Updated to match the expected format.
     
     Args:
         time_data: The API response from UPS
@@ -472,17 +476,31 @@ def parse_time_in_transit(time_data):
         if not time_data:
             return None
             
-        # Extract service information
-        services = time_data.get('timeInTransitResponse', {}).get('services', [])
+        logger.info(f"Parsing time in transit data: {json.dumps(time_data)}")
+            
+        # First check for error responses
+        if 'response' in time_data and 'errors' in time_data.get('response', {}):
+            errors = time_data['response']['errors']
+            logger.error(f"Error in time in transit response: {errors}")
+            return "Error getting delivery estimate"
+            
+        # Check for the services list based on the sample provided
+        services = time_data.get('services', [])
         
         if not services:
+            logger.warning("No services found in time in transit response")
             return "No estimated delivery time available"
+            
+        # Log what services were returned
+        logger.info(f"Found {len(services)} service options")
+        for i, service in enumerate(services):
+            logger.info(f"Service {i+1}: {service.get('serviceLevelDescription', 'Unknown')} - {service.get('estimatedArrival', {}).get('date', 'Unknown')}")
             
         # Find the UPS Ground or lowest cost service
         best_service = None
         for service in services:
-            service_name = service.get('serviceName', '')
-            if 'GROUND' in service_name.upper():
+            service_desc = service.get('serviceLevelDescription', '')
+            if 'GROUND' in service_desc.upper():
                 best_service = service
                 break
                 
@@ -491,18 +509,21 @@ def parse_time_in_transit(time_data):
             best_service = services[0]
             
         if best_service:
-            delivery_date = best_service.get('deliveryDate', '')
-            delivery_time = best_service.get('deliveryTime', '')
-            service_name = best_service.get('serviceName', '')
+            service_desc = best_service.get('serviceLevelDescription', 'Unknown Service')
+            estimated_arrival = best_service.get('estimatedArrival', {})
+            delivery_date = estimated_arrival.get('date', '')
+            delivery_time = estimated_arrival.get('time', '')
             
             if delivery_date and delivery_time:
-                return f"{service_name}: {delivery_date} by {delivery_time}"
+                return f"{service_desc}: {delivery_date} by {delivery_time}"
             elif delivery_date:
-                return f"{service_name}: {delivery_date}"
+                return f"{service_desc}: {delivery_date}"
                 
         return "No estimated delivery time available"
     except Exception as e:
         logger.error(f"Error parsing time in transit: {e}")
+        import traceback
+        logger.error(f"Detailed exception: {traceback.format_exc()}")
         return "Error getting estimated delivery time"
 
 # Function to fix Google Sheets update method
