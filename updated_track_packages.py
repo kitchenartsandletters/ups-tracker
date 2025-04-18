@@ -5,17 +5,15 @@ UPS Package Tracking to Google Sheets
 This script:
 1. Reads tracking numbers from a Google Sheet
 2. Validates addresses using UPS Address Validation API
-3. Sets up Track Alert API subscriptions for real-time updates
-4. Queries the UPS Tracking API for each tracking number
-5. Gets estimated Time in Transit information
-6. Updates the Google Sheet with the latest tracking information
+3. Queries the UPS Tracking API for each tracking number
+4. Gets estimated delivery time using Time in Transit API
+5. Updates the Google Sheet with the latest tracking information
 """
 
 import os
 import base64
 import json
 import logging
-import uuid
 from datetime import datetime
 import time
 
@@ -44,14 +42,12 @@ UPDATE_COLUMN = 'C'      # Column for last update timestamp
 LOCATION_COLUMN = 'D'    # Column for current location
 ADDRESS_COLUMN = 'E'     # Column for validated address
 ETA_COLUMN = 'F'         # Column for estimated delivery time
-ALERT_COLUMN = 'G'       # Column for alert subscription status
 
 # UPS API Base URLs
 UPS_OAUTH_URL = 'https://onlinetools.ups.com/security/v1/oauth/token'
 UPS_TRACK_URL = 'https://onlinetools.ups.com/api/track/v1/details/'
 UPS_ADDRESS_URL = 'https://onlinetools.ups.com/api/addressvalidation/v1/1'
 UPS_TIME_IN_TRANSIT_URL = 'https://onlinetools.ups.com/api/timeintransit/v1'
-UPS_TRACK_ALERT_URL = 'https://onlinetools.ups.com/api/track/v1/alert/create'
 
 def setup_google_sheets():
     """Authenticate with Google Sheets API using service account credentials."""
@@ -93,10 +89,6 @@ def get_ups_oauth_token():
         else:
             logger.error("UPS_CLIENT_SECRET is empty or not set")
         
-        # UPS OAuth endpoint
-        oauth_url = 'https://onlinetools.ups.com/security/v1/oauth/token'
-        logger.info(f"Using OAuth URL: {oauth_url}")
-        
         # Request headers
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -111,14 +103,13 @@ def get_ups_oauth_token():
         
         # Make the request
         response = requests.post(
-            oauth_url,
+            UPS_OAUTH_URL,
             headers=headers,
             data=data,
             auth=(client_id, client_secret)
         )
         
         logger.info(f"OAuth response status code: {response.status_code}")
-        logger.info(f"OAuth response headers: {response.headers}")
         
         if response.status_code == 200:
             token_data = response.json()
@@ -135,8 +126,7 @@ def get_ups_oauth_token():
                 logger.error("Access token not found in response")
                 return None
         else:
-            logger.error(f"Failed to get OAuth token: {response.status_code}")
-            logger.error(f"Response body: {response.text}")
+            logger.error(f"Failed to get OAuth token: {response.status_code} - {response.text}")
             return None
     except KeyError as e:
         logger.error(f"Environment variable not set: {e}")
@@ -144,7 +134,7 @@ def get_ups_oauth_token():
     except Exception as e:
         logger.error(f"Error obtaining UPS OAuth token: {e}")
         return None
-    
+
 def get_tracking_info(tracking_number, access_token):
     """
     Query the UPS Tracking API for a specific tracking number.
@@ -159,17 +149,24 @@ def get_tracking_info(tracking_number, access_token):
     try:
         # UPS Tracking API endpoint
         tracking_url = UPS_TRACK_URL + tracking_number
+        logger.info(f"Using Tracking API URL: {tracking_url}")
         
         # Request headers
+        trans_id = f'track_{int(time.time())}'
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json',
-            'transId': f'track_{int(time.time())}',  # Unique transaction ID
+            'transId': trans_id,
             'transactionSrc': 'tracking'
         }
         
+        logger.info(f"Using transaction ID: {trans_id}")
+        logger.info(f"Sending tracking request for: {tracking_number}")
+        
         # Make the request
         response = requests.get(tracking_url, headers=headers)
+        
+        logger.info(f"Tracking API response status: {response.status_code}")
         
         if response.status_code == 200:
             tracking_data = response.json()
@@ -194,26 +191,38 @@ def validate_address(address, access_token):
         dict: Validated address information or None if an error occurs
     """
     try:
+        # Enhanced address information with default values to avoid missing fields
+        enhanced_address = {
+            "AddressLine": address.get("street", ""),
+            "PoliticalDivision2": address.get("city", ""),
+            "PoliticalDivision1": address.get("state", ""),
+            "PostcodePrimaryLow": address.get("postal_code", ""),
+            "CountryCode": address.get("country", "US")
+        }
+        
+        # Only proceed if we have at least some address information
+        if not any(enhanced_address.values()):
+            logger.warning("No address information available for validation")
+            return None
+            
         # Request headers
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json',
-            'transId': f'address_{uuid.uuid4()}',
+            'transId': f'address_{int(time.time())}',
             'transactionSrc': 'addressValidation'
         }
         
-        # Request body
+        # Request body - enhanced with more fields to meet API requirements
         data = {
             "XAVRequest": {
-                "AddressKeyFormat": {
-                    "AddressLine": address.get("street", ""),
-                    "PoliticalDivision2": address.get("city", ""),
-                    "PoliticalDivision1": address.get("state", ""),
-                    "PostcodePrimaryLow": address.get("postal_code", ""),
-                    "CountryCode": address.get("country", "US")
-                }
+                "AddressKeyFormat": enhanced_address,
+                "RegionalRequestIndicator": "",
+                "MaximumCandidateListSize": "10"
             }
         }
+        
+        logger.info(f"Validating address: {json.dumps(enhanced_address)}")
         
         # Make the request
         response = requests.post(
@@ -221,6 +230,8 @@ def validate_address(address, access_token):
             headers=headers,
             json=data
         )
+        
+        logger.info(f"Address Validation API response status: {response.status_code}")
         
         if response.status_code == 200:
             validation_data = response.json()
@@ -246,26 +257,33 @@ def get_time_in_transit(origin, destination, access_token):
         dict: Time in transit information or None if an error occurs
     """
     try:
+        # Only proceed if we have minimum required information
+        if not (origin.get("postal_code") and destination.get("postal_code")):
+            logger.warning("Missing required postal codes for time in transit calculation")
+            return None
+            
         # Request headers
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json',
-            'transId': f'time_{uuid.uuid4()}',
+            'transId': f'time_{int(time.time())}',
             'transactionSrc': 'timeInTransit'
         }
         
         # Current date in YYYY-MM-DD format
         ship_date = datetime.now().strftime("%Y-%m-%d")
         
-        # Request body
+        # Enhanced request body with more details
         data = {
             "originAddress": {
+                "addressLine": origin.get("street", ""),
                 "city": origin.get("city", ""),
                 "stateProvince": origin.get("state", ""),
                 "postalCode": origin.get("postal_code", ""),
                 "countryCode": origin.get("country", "US")
             },
             "destinationAddress": {
+                "addressLine": destination.get("street", ""),
                 "city": destination.get("city", ""),
                 "stateProvince": destination.get("state", ""),
                 "postalCode": destination.get("postal_code", ""),
@@ -276,8 +294,12 @@ def get_time_in_transit(origin, destination, access_token):
             "weight": {
                 "weight": "1",
                 "unitOfMeasurement": "LBS"
-            }
+            },
+            "totalPackagesInShipment": "1",
+            "workflowCode": "TimeInTransit"
         }
+        
+        logger.info(f"Requesting time in transit estimate from {origin.get('postal_code')} to {destination.get('postal_code')}")
         
         # Make the request
         response = requests.post(
@@ -285,6 +307,8 @@ def get_time_in_transit(origin, destination, access_token):
             headers=headers,
             json=data
         )
+        
+        logger.info(f"Time in Transit API response status: {response.status_code}")
         
         if response.status_code == 200:
             time_data = response.json()
@@ -296,75 +320,6 @@ def get_time_in_transit(origin, destination, access_token):
     except Exception as e:
         logger.error(f"Error getting time in transit: {e}")
         return None
-
-def subscribe_to_tracking_alerts(tracking_number, email, access_token):
-    """
-    Subscribe to tracking alerts using the UPS Track Alert API.
-    
-    Args:
-        tracking_number: The UPS tracking number
-        email: Email address to receive notifications
-        access_token: OAuth access token for UPS API
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Request headers
-        headers = {
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json',
-            'transId': f'alert_{uuid.uuid4()}',
-            'transactionSrc': 'trackAlert'
-        }
-        
-        # Request body
-        data = {
-            "TrackAlertRequest": {
-                "Request": {
-                    "RequestOption": "1",
-                    "TransactionReference": {
-                        "CustomerContext": f"Alert for {tracking_number}"
-                    }
-                },
-                "AlertConfiguration": {
-                    "Event": {
-                        "Delivered": "01",
-                        "Exception": "01",
-                        "OutForDelivery": "01"
-                    },
-                    "EMailNotification": {
-                        "EMailAddress": email,
-                        "UndeliverableEMailAddress": email,
-                        "FromEMailAddress": email,
-                        "Subject": f"UPS Alert: Package {tracking_number} status update",
-                        "Memo": "This is an automated alert from UPS Tracker"
-                    },
-                    "Locale": {
-                        "Language": "ENG",
-                        "Dialect": "US"
-                    }
-                },
-                "InquiryNumber": tracking_number
-            }
-        }
-        
-        # Make the request
-        response = requests.post(
-            UPS_TRACK_ALERT_URL,
-            headers=headers,
-            json=data
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"Successfully subscribed to alerts for {tracking_number}")
-            return True
-        else:
-            logger.error(f"Failed to subscribe to alerts: {response.status_code} - {response.text}")
-            return False
-    except Exception as e:
-        logger.error(f"Error subscribing to alerts: {e}")
-        return False
 
 def parse_tracking_response(tracking_data):
     """
@@ -404,9 +359,22 @@ def parse_tracking_response(tracking_data):
         location_parts = [part for part in [city, state, country] if part]
         location = ', '.join(location_parts) if location_parts else 'Unknown'
         
-        # Create address dict for validation
+        # Try to get street address from shipment information if available
+        try:
+            shipment = tracking_data.get('trackResponse', {}).get('shipment', [{}])[0]
+            ship_to = shipment.get('shipTo', {})
+            street = ship_to.get('address', {}).get('addressLine', '')
+            
+            # If not available in shipTo, try other locations
+            if not street and shipment.get('package'):
+                delivery_detail = shipment.get('package', [{}])[0].get('deliveryDetail', {})
+                street = delivery_detail.get('addressLine', '')
+        except:
+            street = ""
+        
+        # Create address dict for validation with enhanced information
         address_dict = {
-            "street": "",  # Not always available in the tracking response
+            "street": street,
             "city": city,
             "state": state,
             "postal_code": postal_code,
@@ -433,21 +401,9 @@ def parse_validated_address(validation_data):
             return None
             
         # Extract address information
-        address_key_format = validation_data.get('XAVResponse', {}).get('ValidAddressIndicator', {})
+        valid_indicator = validation_data.get('XAVResponse', {}).get('ValidAddressIndicator')
         
-        if not address_key_format:
-            # Try to get candidate addresses if exact match not found
-            candidate = validation_data.get('XAVResponse', {}).get('Candidate', [{}])[0]
-            if not candidate:
-                return "Address could not be validated"
-                
-            # Use the first candidate
-            address_lines = candidate.get('AddressKeyFormat', {}).get('AddressLine', [])
-            city = candidate.get('AddressKeyFormat', {}).get('PoliticalDivision2', '')
-            state = candidate.get('AddressKeyFormat', {}).get('PoliticalDivision1', '')
-            postal = candidate.get('AddressKeyFormat', {}).get('PostcodePrimaryLow', '')
-            country = candidate.get('AddressKeyFormat', {}).get('CountryCode', '')
-        else:
+        if valid_indicator:
             # Use the validated address
             validated = validation_data.get('XAVResponse', {}).get('AddressKeyFormat', {})
             address_lines = validated.get('AddressLine', [])
@@ -455,6 +411,19 @@ def parse_validated_address(validation_data):
             state = validated.get('PoliticalDivision1', '')
             postal = validated.get('PostcodePrimaryLow', '')
             country = validated.get('CountryCode', '')
+        else:
+            # Try to get candidate addresses if exact match not found
+            candidates = validation_data.get('XAVResponse', {}).get('Candidate', [])
+            if not candidates:
+                return "Address could not be validated"
+                
+            # Use the first candidate
+            candidate = candidates[0]
+            address_lines = candidate.get('AddressKeyFormat', {}).get('AddressLine', [])
+            city = candidate.get('AddressKeyFormat', {}).get('PoliticalDivision2', '')
+            state = candidate.get('AddressKeyFormat', {}).get('PoliticalDivision1', '')
+            postal = candidate.get('AddressKeyFormat', {}).get('PostcodePrimaryLow', '')
+            country = candidate.get('AddressKeyFormat', {}).get('CountryCode', '')
         
         # Format the address
         formatted_address = ""
@@ -499,7 +468,7 @@ def parse_time_in_transit(time_data):
         best_service = None
         for service in services:
             service_name = service.get('serviceName', '')
-            if 'GROUND' in service_name:
+            if 'GROUND' in service_name.upper():
                 best_service = service
                 break
                 
@@ -510,11 +479,12 @@ def parse_time_in_transit(time_data):
         if best_service:
             delivery_date = best_service.get('deliveryDate', '')
             delivery_time = best_service.get('deliveryTime', '')
+            service_name = best_service.get('serviceName', '')
             
             if delivery_date and delivery_time:
-                return f"{delivery_date} by {delivery_time}"
+                return f"{service_name}: {delivery_date} by {delivery_time}"
             elif delivery_date:
-                return delivery_date
+                return f"{service_name}: {delivery_date}"
                 
         return "No estimated delivery time available"
     except Exception as e:
@@ -534,30 +504,31 @@ def update_sheet_row(sheet, row, data):
         # Add current timestamp to show when the script ran
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+        # Fix the deprecated method warnings by using the recommended approach
+        # for gspread updates
+        
         # Update status
         if 'status' in data and data['status']:
-            sheet.update(f'{STATUS_COLUMN}{row}', data['status'])
+            sheet.update(range_name=f'{STATUS_COLUMN}{row}', values=[[data['status']]])
         
         # Update last_update
         if 'last_update' in data and data['last_update']:
-            sheet.update(f'{UPDATE_COLUMN}{row}', f"{data['last_update']} (checked: {current_time})")
+            sheet.update(
+                range_name=f'{UPDATE_COLUMN}{row}', 
+                values=[[f"{data['last_update']} (checked: {current_time})"]]
+            )
         
         # Update location
         if 'location' in data and data['location']:
-            sheet.update(f'{LOCATION_COLUMN}{row}', data['location'])
+            sheet.update(range_name=f'{LOCATION_COLUMN}{row}', values=[[data['location']]])
             
         # Update validated_address
         if 'validated_address' in data and data['validated_address']:
-            sheet.update(f'{ADDRESS_COLUMN}{row}', data['validated_address'])
+            sheet.update(range_name=f'{ADDRESS_COLUMN}{row}', values=[[data['validated_address']]])
             
         # Update estimated_delivery
         if 'estimated_delivery' in data and data['estimated_delivery']:
-            sheet.update(f'{ETA_COLUMN}{row}', data['estimated_delivery'])
-            
-        # Update alert_status
-        if 'alert_status' in data and data['alert_status'] is not None:
-            status = "Subscribed" if data['alert_status'] else "Failed to subscribe"
-            sheet.update(f'{ALERT_COLUMN}{row}', status)
+            sheet.update(range_name=f'{ETA_COLUMN}{row}', values=[[data['estimated_delivery']]])
             
         logger.info(f"Updated row {row} with latest tracking information")
     except Exception as e:
@@ -583,10 +554,9 @@ def main():
                 'Last Update', 
                 'Current Location', 
                 'Validated Address', 
-                'Estimated Delivery', 
-                'Alert Status'
+                'Estimated Delivery'
             ]
-            sheet.update('A1:G1', [headers])
+            sheet.update('A1:F1', [headers])
             start_row = 2
         else:
             start_row = 2  # Skip header row
@@ -596,9 +566,20 @@ def main():
         if not access_token:
             logger.error("Failed to obtain UPS OAuth token. Exiting.")
             return
+            
+        # Get origin address from environment variables
+        origin_address = {
+            "street": os.environ.get('ORIGIN_STREET', ''),
+            "city": os.environ.get('ORIGIN_CITY', ''),
+            "state": os.environ.get('ORIGIN_STATE', ''),
+            "postal_code": os.environ.get('ORIGIN_ZIP', ''),
+            "country": "US"
+        }
         
-        # Get notification email from environment variable
-        notification_email = os.environ.get('NOTIFICATION_EMAIL', '')
+        if any(origin_address.values()):
+            logger.info(f"Using origin address: {origin_address.get('city')}, {origin_address.get('state')} {origin_address.get('postal_code')}")
+        else:
+            logger.warning("No origin address provided for time-in-transit calculations")
         
         # Process each tracking number
         for i, row in enumerate(all_values[start_row-1:], start=start_row):
@@ -626,26 +607,16 @@ def main():
             if address_dict and any(address_dict.values()):
                 validation_data = validate_address(address_dict, access_token)
                 validated_address = parse_validated_address(validation_data)
-                update_data['validated_address'] = validated_address
+                if validated_address:
+                    update_data['validated_address'] = validated_address
                 
-                # If we have origin address (could be from a config or env var)
-                origin_address = {
-                    "city": os.environ.get('ORIGIN_CITY', ''),
-                    "state": os.environ.get('ORIGIN_STATE', ''),
-                    "postal_code": os.environ.get('ORIGIN_ZIP', ''),
-                    "country": "US"
-                }
-                
+                # If we have origin address, estimate transit time
                 if any(origin_address.values()) and any(address_dict.values()):
                     time_data = get_time_in_transit(origin_address, address_dict, access_token)
                     estimated_delivery = parse_time_in_transit(time_data)
-                    update_data['estimated_delivery'] = estimated_delivery
+                    if estimated_delivery:
+                        update_data['estimated_delivery'] = estimated_delivery
             
-            # Subscribe to tracking alerts if email is provided
-            if notification_email:
-                alert_status = subscribe_to_tracking_alerts(tracking_number, notification_email, access_token)
-                update_data['alert_status'] = alert_status
-                
             # Update sheet
             if update_data:
                 update_sheet_row(sheet, i, update_data)
