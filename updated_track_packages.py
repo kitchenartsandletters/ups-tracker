@@ -360,7 +360,7 @@ def get_time_in_transit(origin, destination, access_token):
 def parse_tracking_response(tracking_data):
     """
     Parse the UPS Tracking API response to extract relevant information.
-    Enhanced to specifically extract delivery date information.
+    Enhanced to specifically extract delivery date information with human-friendly formatting.
     
     Args:
         tracking_data: The API response from UPS
@@ -383,10 +383,20 @@ def parse_tracking_response(tracking_data):
         activity = package.get('activity', [{}])[0]
         status = activity.get('status', {}).get('description', 'Unknown')
         
-        # Get last update time
+        # Get last update time - with better formatting
         date = activity.get('date', '')
         time_str = activity.get('time', '')
-        last_update = f"{date} {time_str}" if date and time_str else 'Unknown'
+        
+        # Format the date and time for readability
+        formatted_date = format_ups_date(date)
+        formatted_time = format_ups_time(time_str)
+        
+        if formatted_date and formatted_time:
+            last_update = f"{formatted_date} at {formatted_time}"
+        elif formatted_date:
+            last_update = formatted_date
+        else:
+            last_update = 'Unknown'
         
         # Get location
         location_info = activity.get('location', {})
@@ -437,7 +447,9 @@ def parse_tracking_response(tracking_data):
                 logger.info(f"Found delivery date: {date}, type: {type_code}")
                 
                 if date:
-                    delivery_estimate = f"Estimated delivery: {date}"
+                    # Format date to be human-readable
+                    formatted_delivery_date = format_ups_date(date)
+                    delivery_estimate = formatted_delivery_date
                     break
         
         # 2. If not found, check deliveryTime object
@@ -452,15 +464,13 @@ def parse_tracking_response(tracking_data):
                 
                 if date_type and (start_time or end_time):
                     if date_type == 'EDW' and start_time and end_time:
-                        # Format time for better readability (HHMMSS to HH:MM)
-                        start_formatted = f"{start_time[:2]}:{start_time[2:4]}" if len(start_time) >= 4 else start_time
-                        end_formatted = f"{end_time[:2]}:{end_time[2:4]}" if len(end_time) >= 4 else end_time
-                        delivery_estimate = f"Estimated delivery window: {start_formatted}-{end_formatted}"
+                        # Format time for better readability
+                        start_formatted = format_ups_time(start_time)
+                        end_formatted = format_ups_time(end_time)
+                        delivery_estimate = f"{start_formatted} - {end_formatted}"
                     elif date_type == 'CMT' and end_time:
-                        end_formatted = f"{end_time[:2]}:{end_time[2:4]}" if len(end_time) >= 4 else end_time
-                        delivery_estimate = f"Commitment time: by {end_formatted}"
-                    elif date_type:
-                        delivery_estimate = f"Delivery type: {date_type}"
+                        end_formatted = format_ups_time(end_time)
+                        delivery_estimate = f"By {end_formatted}"
         
         # 3. If still not found, check package status for delivery information
         if not delivery_estimate and 'SCHEDULED DELIVERY' in status.upper():
@@ -468,7 +478,29 @@ def parse_tracking_response(tracking_data):
             import re
             date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', status)
             if date_match:
-                delivery_estimate = f"Scheduled delivery: {date_match.group(1)}"
+                delivery_date = date_match.group(1)
+                # Try to convert MM/DD/YY format to more readable
+                try:
+                    parts = delivery_date.split('/')
+                    if len(parts) == 3:
+                        month_num = int(parts[0])
+                        day = int(parts[1])
+                        year = parts[2]
+                        if len(year) == 2:
+                            year = "20" + year  # Assume 21st century
+                        
+                        month_names = ["January", "February", "March", "April", "May", "June", 
+                                      "July", "August", "September", "October", "November", "December"]
+                        month_name = month_names[month_num - 1] if 1 <= month_num <= 12 else ""
+                        
+                        if month_name:
+                            delivery_estimate = f"{month_name} {day}, {year}"
+                        else:
+                            delivery_estimate = delivery_date
+                    else:
+                        delivery_estimate = delivery_date
+                except:
+                    delivery_estimate = delivery_date
         
         # If we found a delivery estimate, log it
         if delivery_estimate:
@@ -585,11 +617,83 @@ def parse_time_in_transit(time_data):
         logger.error(f"Detailed exception: {traceback.format_exc()}")
         return "Error getting estimated delivery time"
 
+def format_ups_date(date_str):
+    """
+    Format UPS date strings to be more human-readable.
+    Converts formats like "20250418" to "April 18, 2025"
+    
+    Args:
+        date_str: UPS format date string
+        
+    Returns:
+        str: Human-readable date
+    """
+    try:
+        if not date_str or len(date_str) < 8:
+            return date_str
+            
+        # Check if it's in the format YYYYMMDD
+        if len(date_str) >= 8 and date_str.isdigit():
+            year = date_str[:4]
+            month = date_str[4:6]
+            day = date_str[6:8]
+            
+            # Convert month number to name
+            month_names = ["January", "February", "March", "April", "May", "June", 
+                           "July", "August", "September", "October", "November", "December"]
+            try:
+                month_num = int(month)
+                if 1 <= month_num <= 12:
+                    month_name = month_names[month_num - 1]
+                    return f"{month_name} {int(day)}, {year}"
+            except:
+                pass
+                
+        # For other formats, return as is
+        return date_str
+    except Exception as e:
+        logger.error(f"Error formatting date {date_str}: {e}")
+        return date_str
+
+def format_ups_time(time_str):
+    """
+    Format UPS time strings to be more human-readable.
+    Converts formats like "095158" to "9:51 AM"
+    
+    Args:
+        time_str: UPS format time string (HHMMSS in 24h format)
+        
+    Returns:
+        str: Human-readable time
+    """
+    try:
+        if not time_str or len(time_str) < 6:
+            return time_str
+            
+        # Check if it's in the format HHMMSS
+        if len(time_str) >= 6 and time_str.isdigit():
+            hour = int(time_str[:2])
+            minute = time_str[2:4]
+            
+            # Convert to 12-hour format with AM/PM
+            am_pm = "AM" if hour < 12 else "PM"
+            hour_12 = hour if hour <= 12 else hour - 12
+            hour_12 = 12 if hour_12 == 0 else hour_12  # Convert 0 to 12 for 12 AM
+            
+            return f"{hour_12}:{minute} {am_pm}"
+                
+        # For other formats, return as is
+        return time_str
+    except Exception as e:
+        logger.error(f"Error formatting time {time_str}: {e}")
+        return time_str
+
 # Function to fix Google Sheets update method
 def update_sheet_row(sheet, row, data):
     """
     Update a row in the Google Sheet with tracking information.
     Uses the current recommended gspread method to avoid deprecation warnings.
+    Also formats the "Last Update" date for better readability.
     
     Args:
         sheet: Google Sheet object
@@ -611,11 +715,11 @@ def update_sheet_row(sheet, row, data):
                 'values': [[data['status']]]
             })
         
-        # Update last_update
+        # Update last_update - format "checked" time more clearly
         if 'last_update' in data and data['last_update']:
             updates.append({
                 'range': f'{UPDATE_COLUMN}{row}',
-                'values': [[f"{data['last_update']} (checked: {current_time})"]]
+                'values': [[f"{data['last_update']} (updated {current_time})"]]
             })
         
         # Update location
@@ -632,11 +736,16 @@ def update_sheet_row(sheet, row, data):
                 'values': [[data['validated_address']]]
             })
             
-        # Update estimated_delivery
+        # Update estimated_delivery - remove prefix as requested
         if 'estimated_delivery' in data and data['estimated_delivery']:
+            # Remove "Estimated delivery: " prefix if present
+            delivery = data['estimated_delivery']
+            if delivery.startswith("Estimated delivery: "):
+                delivery = delivery[len("Estimated delivery: "):]
+                
             updates.append({
                 'range': f'{ETA_COLUMN}{row}',
-                'values': [[data['estimated_delivery']]]
+                'values': [[delivery]]
             })
         
         # If we have updates, apply them as a batch
@@ -646,6 +755,8 @@ def update_sheet_row(sheet, row, data):
         
     except Exception as e:
         logger.error(f"Error updating sheet row {row}: {e}")
+        import traceback
+        logger.error(f"Update error details: {traceback.format_exc()}")
 
 def main():
     """Main function to orchestrate the tracking process."""
