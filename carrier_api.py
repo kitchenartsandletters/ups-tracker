@@ -423,37 +423,162 @@ class UPSApi(CarrierAPI):
             logger.error(f"Error getting UPS time in transit: {e}")
             return None
     
-    def parse_tracking_response(self, tracking_data):
-        """Parse the USPS tracking response."""
+        def parse_tracking_response(tracking_data):
+                """
+                Parse the UPS Tracking API response to extract relevant information.
+                Enhanced to specifically extract delivery date information with human-friendly formatting.
+                
+                Args:
+                    tracking_data: The API response from UPS
+                    
+                Returns:
+                    tuple: (status, last_update, location, address, delivery_estimate) or (None, None, None, None, None) if parsing fails
+                """
         try:
             if not tracking_data:
                 return None, None, None, None, None
+                
+            # Log the tracking data structure for debugging
+            logger.info(f"Parsing tracking data response")
             
-            # Extract basic tracking info
-            status = tracking_data.get('status', 'Unknown')
-            last_update = tracking_data.get('last_update', 'Unknown')
+            # Extract package information
+            shipment = tracking_data.get('trackResponse', {}).get('shipment', [{}])[0]
+            package = shipment.get('package', [{}])[0]
             
-            # Extract location
-            city = tracking_data.get('city', '')
-            state = tracking_data.get('state', '')
-            country = tracking_data.get('country', 'US')
+            # Get status
+            activity = package.get('activity', [{}])[0]
+            status = activity.get('status', {}).get('description', 'Unknown')
+            
+            # Get last update time - with better formatting
+            date = activity.get('date', '')
+            time_str = activity.get('time', '')
+            
+            # Format the date and time for readability
+            formatted_date = format_ups_date(date)
+            formatted_time = format_ups_time(time_str)
+            
+            if formatted_date and formatted_time:
+                last_update = f"{formatted_date} at {formatted_time}"
+            elif formatted_date:
+                last_update = formatted_date
+            else:
+                last_update = 'Unknown'
+            
+            # Get location
+            location_info = activity.get('location', {})
+            address = location_info.get('address', {})
+            
+            city = address.get('city', '')
+            state = address.get('stateProvince', '')
+            country = address.get('country', '')
+            postal_code = address.get('postalCode', '')
             
             location_parts = [part for part in [city, state, country] if part]
             location = ', '.join(location_parts) if location_parts else 'Unknown'
             
-            # Create address dict for validation (limited info available from USPS)
+            # Extract street address if available
+            street = ""
+            ship_to = shipment.get('shipTo', {})
+            if ship_to:
+                ship_to_address = ship_to.get('address', {})
+                if ship_to_address:
+                    street_lines = ship_to_address.get('addressLine', [])
+                    if isinstance(street_lines, list) and street_lines:
+                        street = street_lines[0]
+                    elif isinstance(street_lines, str):
+                        street = street_lines
+            
+            # Create address dict for validation
             address_dict = {
+                "street": street,
                 "city": city,
                 "state": state,
+                "postal_code": postal_code,
                 "country": country
             }
             
-            # Extract delivery estimate
-            delivery_estimate = tracking_data.get('expected_delivery_date', None)
+            # Extract delivery date information - primary focus
+            delivery_estimate = None
+            
+            # Check multiple places for delivery date information
+            
+            # 1. Check the deliveryDate object if present
+            delivery_dates = package.get('deliveryDate', [])
+            if delivery_dates:
+                for delivery_date_obj in delivery_dates:
+                    date = delivery_date_obj.get('date', '')
+                    type_code = delivery_date_obj.get('type', '')
+                    
+                    # Log what we found
+                    logger.info(f"Found delivery date: {date}, type: {type_code}")
+                    
+                    if date:
+                        # Format date to be human-readable
+                        formatted_delivery_date = format_ups_date(date)
+                        delivery_estimate = formatted_delivery_date
+                        break
+            
+            # 2. If not found, check deliveryTime object
+            if not delivery_estimate:
+                delivery_time = package.get('deliveryTime', {})
+                if delivery_time:
+                    date_type = delivery_time.get('type', '')
+                    start_time = delivery_time.get('startTime', '')
+                    end_time = delivery_time.get('endTime', '')
+                    
+                    logger.info(f"Found delivery time: type={date_type}, start={start_time}, end={end_time}")
+                    
+                    if date_type and (start_time or end_time):
+                        if date_type == 'EDW' and start_time and end_time:
+                            # Format time for better readability
+                            start_formatted = format_ups_time(start_time)
+                            end_formatted = format_ups_time(end_time)
+                            delivery_estimate = f"{start_formatted} - {end_formatted}"
+                        elif date_type == 'CMT' and end_time:
+                            end_formatted = format_ups_time(end_time)
+                            delivery_estimate = f"By {end_formatted}"
+            
+            # 3. If still not found, check package status for delivery information
+            if not delivery_estimate and 'SCHEDULED DELIVERY' in status.upper():
+                # Extract date from status if possible
+                import re
+                date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', status)
+                if date_match:
+                    delivery_date = date_match.group(1)
+                    # Try to convert MM/DD/YY format to more readable
+                    try:
+                        parts = delivery_date.split('/')
+                        if len(parts) == 3:
+                            month_num = int(parts[0])
+                            day = int(parts[1])
+                            year = parts[2]
+                            if len(year) == 2:
+                                year = "20" + year  # Assume 21st century
+                            
+                            month_names = ["January", "February", "March", "April", "May", "June", 
+                                            "July", "August", "September", "October", "November", "December"]
+                            month_name = month_names[month_num - 1] if 1 <= month_num <= 12 else ""
+                            
+                            if month_name:
+                                delivery_estimate = f"{month_name} {day}, {year}"
+                            else:
+                                delivery_estimate = delivery_date
+                        else:
+                            delivery_estimate = delivery_date
+                    except:
+                        delivery_estimate = delivery_date
+            
+            # If we found a delivery estimate, log it
+            if delivery_estimate:
+                logger.info(f"Extracted delivery estimate: {delivery_estimate}")
+            else:
+                logger.warning("No delivery estimate found in tracking data")
             
             return status, last_update, location, address_dict, delivery_estimate
         except Exception as e:
-            logger.error(f"Error parsing USPS tracking response: {e}")
+            logger.error(f"Error parsing tracking response: {e}")
+            import traceback
+            logger.error(f"Parse error details: {traceback.format_exc()}")
             return None, None, None, None, None
     
     def validate_address(self, address):
