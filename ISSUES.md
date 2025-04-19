@@ -63,21 +63,23 @@ Enhance the system to support multiple tracking sheets for different purposes, c
 
 ---
 
-### KIT-74: Shopify Integration
+### KIT-74: ShipStation Integration
 
-**Title:** Auto-populate Tracking Numbers from Shopify
+**Title:** Auto-populate Tracking Numbers from ShipStation
 
 **Description:**
-Develop an integration with the Shopify API to automatically populate tracking numbers in the Google Sheet whenever a new shipment is created, eliminating manual entry.
+Develop an integration with the ShipStation API to automatically populate tracking numbers in the Google Sheet whenever a new shipment is created, eliminating manual entry.
 
 **Tasks:**
-- Research Shopify API endpoints for order fulfillment
-- Create a Shopify App or private integration
+- Build validation to prevent duplicate entries in the Google Sheet
+- Research ShipStation API endpoints for order fulfillment
 - Set up webhooks for shipment creation events
-- Implement script to extract tracking numbers from Shopify events
+- Implement script to extract tracking numbers from ShipStation events
 - Add new tracking numbers to the Google Sheet
-- Add order/customer reference to connect tracking with orders
+- Add order/customer reference to connect tracking with orders and add hyperlinks to Shopify dashboard order page
 - Test with various shipping scenarios (multiple items, split shipments)
+- Add carrier auto-detection to support future multi-carrier implementations
+- Create an automated override option for specific cases (i.e. voided labels)
 
 **Priority:** High
 **Estimated Completion:** 7 days
@@ -223,15 +225,10 @@ Develop a tool that can automatically identify and add all active, undelivered s
 
 **Tasks:**
 - Develop a script to connect to order management systems or shipping platforms
-- Implement logic to identify all shipments with "open" status (not delivered)
+- Implement logic to identify all shipments with "open" status (not delivered) (will develop in KIT-74 ShipStation Integration)
 - Create filters for shipment date ranges to handle historical shipments
-- Build validation to prevent duplicate entries in the Google Sheet
-- Add carrier auto-detection to support future multi-carrier implementations
-- Implement batch processing for large volumes of shipments
-- Create a manual override option for adding specific shipments
+- Create an automated override option for specific cases (i.e. voided labels) (KIT-74)
 - Add reporting capabilities to summarize added shipments
-- Create a scheduled job for regular database seeding
-- Design a user interface for manual operation of the seeding tool
+- Create a scheduled job for regular database increments (covered in KIT-74 ShipStation Integration)
 
-**Priority:** Medium
-**Estimated Completion:** 4 days
+**STATUS**: In Progress 04/19/25 - see README.md

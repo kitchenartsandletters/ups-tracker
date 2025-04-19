@@ -17,3 +17,7 @@ __pycache__/
 *.key
 *.pem
 *.p12
+
+venv/
+
+seeding_tool.logseeding_report_20250418_172342.txtfinal_extraction.pyshipstation_v2_response.jsoncheck_package_tracking.pyshipstation_direct_tracking.pyseed_tracking_database.pyShipStation_V2_Tracking.mdshipstation_sample_shipment.jsonshipstation_raw_response.jsonfind_tracking_numbers.pyshipstation_debug.pyapi_auth_test.pyfilter_active_shipments.pydebug_response_sample.pyREADME Database Seeding Tool.md
