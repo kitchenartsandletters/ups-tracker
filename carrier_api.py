@@ -710,11 +710,11 @@ class USPSApi(CarrierAPI):
             # Once API is configured, replace the mock data with actual API calls:
             """
             # Build XML request
-            xml_request = f"""
+            xml_request = f'''
             <TrackFieldRequest USERID="{self.user_id}">
-            <TrackID ID="{tracking_number}"></TrackID>
+                <TrackID ID="{tracking_number}"></TrackID>
             </TrackFieldRequest>
-            """
+            '''
             
             # Parameters for the API request
             params = {
