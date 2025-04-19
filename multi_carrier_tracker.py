@@ -38,7 +38,7 @@ SCOPES = [
 ]
 
 # Constants
-SHEET_NAME = 'Shipped Orders Tracker'  # Updated name (was 'UPS Tracker')
+SHEET_NAME = 'UPS Tracker'  # Updated name (was 'UPS Tracker')
 TRACKING_COLUMN = 'A'    # Column for tracking numbers
 CARRIER_COLUMN = 'B'     # Column for carrier info
 STATUS_COLUMN = 'C'      # Column for status
