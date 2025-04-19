@@ -79,7 +79,8 @@ Develop an integration with the ShipStation API to automatically populate tracki
 - Add order/customer reference to connect tracking with orders and add hyperlinks to Shopify dashboard order page
 - Test with various shipping scenarios (multiple items, split shipments)
 - Add carrier auto-detection to support future multi-carrier implementations
-- Create an automated override option for specific cases (i.e. voided labels)
+- Create an automated override option for specific cases (i.e. damage claims)
+- Clean up results by removing unneeded shipments (i.e. voided, marked "DELIVERED")
 
 **Priority:** High
 **Estimated Completion:** 7 days
@@ -88,19 +89,20 @@ Develop an integration with the ShipStation API to automatically populate tracki
 
 ### KIT-75: Multi-Carrier Support
 
-**Title:** Add Support for Additional Carriers (USPS, DHL, FedEx)
+**Title:** Add Support for Additional Carriers (USPS, DHL)
 
 **Description:**
 Expand the tracking system to support multiple carriers beyond UPS, allowing comprehensive tracking across all shipping methods.
 
 **Tasks:**
-- Research API requirements for USPS, DHL, and FedEx
+- Research API requirements for USPS, DHL
 - Create developer accounts for each carrier
+- Create placeholders for cron script while we wait on API approval
 - Implement carrier detection based on tracking number format
 - Create modular API interfaces for each carrier
 - Standardize the response format across carriers
-- Update the Google Sheet structure to include carrier information
-- Add carrier logos or identifiers in the sheet
+- Update the Google Sheet structure to include carrier information (e.g. special column with conditional formatted cells)
+- Add carrier logos or identifiers in the sheet (e.g. special column with conditional formatted cells)
 - Create comprehensive testing suite with sample tracking numbers
 
 **Priority:** Medium
@@ -231,4 +233,16 @@ Develop a tool that can automatically identify and add all active, undelivered s
 - Add reporting capabilities to summarize added shipments
 - Create a scheduled job for regular database increments (covered in KIT-74 ShipStation Integration)
 
-**STATUS**: In Progress 04/19/25 - see README.md
+**STATUS**: Completed 04/19/25 - see README.md
+
+### KIT-82: Shopify Integration
+
+**Title:** Auto-populate Order Details and Hyperlinks from Shopify
+
+**Description:**
+Develop a tool that can automatically identify and add all active Shopify order information to the tracking database. Hyperlinks will be added to order number and connect to the their respective Shopify order pages.
+
+**Tasks:**
+- Add order/customer reference to connect tracking with orders and add hyperlinks to Shopify dashboard order page
+
+**STATUS**: In Progress 04/19/25

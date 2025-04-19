@@ -1,0 +1,65 @@
+name: Track Multi-Carrier Packages
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          # Write credentials directly to file
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+          
+          # Run test script to verify credentials
+          python test_credentials.py
+
+      - name: Run tracking script
+        env:
+          # UPS credentials
+          UPS_CLIENT_ID: ${{ secrets.UPS_CLIENT_ID }}
+          UPS_CLIENT_SECRET: ${{ secrets.UPS_CLIENT_SECRET }}
+          
+          # USPS credentials
+          USPS_USER_ID: ${{ secrets.USPS_USER_ID }}
+          
+          # DHL credentials
+          DHL_API_KEY: ${{ secrets.DHL_API_KEY }}
+          
+          # Google Sheets credentials
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          
+          # Origin address for transit time calculations
+          ORIGIN_STREET: ${{ secrets.ORIGIN_STREET }}
+          ORIGIN_CITY: ${{ secrets.ORIGIN_CITY }}
+          ORIGIN_STATE: ${{ secrets.ORIGIN_STATE }}
+          ORIGIN_ZIP: ${{ secrets.ORIGIN_ZIP }}
+          
+          # Optional notification settings
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        run: python multi_carrier_tracker.py
+
+      - name: Run ShipStation seeding (once per day)
+        # Only run this step at midnight UTC (when cron job with hours=0 runs)
+        if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * *'
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHIPSTATION_API_KEY: ${{ secrets.SHIPSTATION_API_KEY }}
+        run: python minimal_tracking_seeder.py

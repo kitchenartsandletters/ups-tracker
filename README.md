@@ -5,7 +5,7 @@ This project automates tracking UPS, USPS, and DHL packages and logs their statu
 
 ## Features
 
-- **Package Tracking**: Retrieve real-time package status and location using UPS Tracking API
+- **Package Tracking**: Retrieve real-time package status and location using UPS, USPS, and DHL APIs
 - **Address Validation**: Validate delivery addresses with UPS Address Validation API
 - **Delivery Estimates**: Get estimated delivery times directly from tracking data
 - **Human-Friendly Dates**: All dates and times are formatted for easy reading
@@ -147,35 +147,6 @@ python minimal_tracking_seeder.py
   ```
 - **Duplicate Prevention**: Existing tracking numbers in column A are skipped, ensuring no duplicates.
 
-
-### Usage
-
-Run the seeding tool to populate your tracking database with UPS shipments seeded from ShipStation:
-
-```bash
-python minimal_tracking_seeder.py
-```
-
-### API Notes
-
-- **Date Window**: The tool filters shipments created in the past **120 days** using ISO 8601 timestamps (`created_at_start` and `created_at_end` query parameters).
-- **Sorting**: Results are sorted by `created_at` in **descending** order (`sort_by=created_at`, `sort_dir=desc`) so that the newest shipments are processed first.
-- **Pagination**: The script limits to **20 pages** (`page` and `page_size`) to prevent long backfills.
-- **Parameter Naming**: Uses **snake_case** for all API parameters:
-  - `created_at_start`, `created_at_end` (not `createDateStart`/`createDateEnd`)
-  - `page_size` (not `pageSize`)
-  - `sort_by`, `sort_dir` (not `sortBy`/`sortDir`)
-- **Label Endpoint**: Fetches package-level tracking via `GET /v2/labels?shipment_id={shipment_id}&page=1&page_size=100`.
-- **Carrier Filtering**: Strictly matches UPS numbers with `re.fullmatch(r'^1Z[0-9A-Z]{16}$|^T\d{10}$|^\d{9}$')`.
-- **Authentication**: Include your API key in the headers:
-  ```python
-  headers = {
-      'API-Key': SHIPSTATION_API_KEY,
-      'Content-Type': 'application/json'
-  }
-  ```
-- **Duplicate Prevention**: Existing tracking numbers in column A are skipped, ensuring no duplicates.
-
 ## Improvement Roadmap
 
 See the Issues tab for planned improvements:
@@ -183,7 +154,7 @@ See the Issues tab for planned improvements:
 1. Optimize cron job frequency for better data timeliness
 2. Add support for multiple Google Sheets
 3. Enable direct integration with e-commerce platforms (Shopify, ShipStation, etc.)
-4. Add support for additional carriers (USPS, DHL, etc.)
+4. Expand multi-carrier support for international shipments (USPS, DHL)
 5. Add email notifications for delivery exceptions
 6. Create a database seeding tool for adding all in-transit shipments 
 
